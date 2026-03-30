@@ -1,0 +1,13 @@
+[package]
+name = "mdpdf"
+version = "0.1.0"
+edition = "2024"
+description = "Convert Markdown to beautifully typeset PDFs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+pulldown-cmark = { version = "0.13", features = ["simd"] }
+typst = "0.14"
+typst-pdf = "0.14"
+comemo = "0.5"
+anyhow = "1"
