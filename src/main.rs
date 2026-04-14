@@ -3,7 +3,8 @@ mod convert;
 mod fonts;
 
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -13,12 +14,18 @@ use compile::CompileOptions;
 #[derive(Parser)]
 #[command(name = "mdpdf", version, about = "Convert Markdown to beautifully typeset PDFs")]
 struct Cli {
-    /// Markdown file path (use "-" for stdin)
-    input: String,
+    /// Markdown file paths (use "-" for stdin)
+    #[arg(required = true)]
+    inputs: Vec<String>,
 
-    /// Output PDF path [default: <input-stem>.pdf]
+    /// Output PDF path [default: <input-stem>.pdf, or combined.pdf with --combine].
+    /// Required when passing multiple inputs without --combine is not allowed.
     #[arg(short, long)]
     output: Option<PathBuf>,
+
+    /// Combine all inputs into a single PDF, with a page break between each document
+    #[arg(short = 'c', long)]
+    combine: bool,
 
     /// PDF document title metadata
     #[arg(short, long)]
@@ -35,21 +42,18 @@ struct Cli {
     /// Page margins in mm
     #[arg(long, default_value = "25")]
     margin: f64,
+
+    /// Open each generated PDF in the system's default viewer
+    #[arg(long)]
+    open: bool,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let markdown = read_input(&cli.input)?;
-
-    let output_path = cli.output.unwrap_or_else(|| {
-        if cli.input == "-" {
-            PathBuf::from("output.pdf")
-        } else {
-            let p = PathBuf::from(&cli.input);
-            p.with_extension("pdf")
-        }
-    });
+    if cli.output.is_some() && cli.inputs.len() > 1 && !cli.combine {
+        anyhow::bail!("--output with multiple inputs requires --combine");
+    }
 
     let page_paper = match cli.page_size.to_lowercase().as_str() {
         "letter" | "us-letter" => "us-letter",
@@ -67,14 +71,68 @@ fn main() -> Result<()> {
         title: cli.title,
     };
 
-    let typst_markup = convert::markdown_to_typst(&markdown);
-    let pdf_bytes = compile::compile_to_pdf(&typst_markup, &options)?;
+    if cli.combine {
+        let mut parts: Vec<String> = Vec::with_capacity(cli.inputs.len());
+        for input in &cli.inputs {
+            let markdown = read_input(input)?;
+            parts.push(convert::markdown_to_typst(&markdown));
+        }
+        let typst_markup = parts.join("\n#pagebreak(weak: true)\n");
 
-    std::fs::write(&output_path, &pdf_bytes)
-        .with_context(|| format!("Failed to write PDF to {}", output_path.display()))?;
+        let output_path = cli.output.clone().unwrap_or_else(|| PathBuf::from("combined.pdf"));
+        let pdf_bytes = compile::compile_to_pdf(&typst_markup, &options)?;
+        std::fs::write(&output_path, &pdf_bytes)
+            .with_context(|| format!("Failed to write PDF to {}", output_path.display()))?;
+        eprintln!("{}", output_path.display());
 
-    eprintln!("{}", output_path.display());
+        if cli.open {
+            if let Err(e) = open_path(&output_path) {
+                eprintln!("Warning: failed to open {}: {}", output_path.display(), e);
+            }
+        }
+        return Ok(());
+    }
 
+    for input in &cli.inputs {
+        let markdown = read_input(input)?;
+
+        let output_path = cli.output.clone().unwrap_or_else(|| {
+            if input == "-" {
+                PathBuf::from("output.pdf")
+            } else {
+                PathBuf::from(input).with_extension("pdf")
+            }
+        });
+
+        let typst_markup = convert::markdown_to_typst(&markdown);
+        let pdf_bytes = compile::compile_to_pdf(&typst_markup, &options)?;
+
+        std::fs::write(&output_path, &pdf_bytes)
+            .with_context(|| format!("Failed to write PDF to {}", output_path.display()))?;
+
+        eprintln!("{}", output_path.display());
+
+        if cli.open {
+            if let Err(e) = open_path(&output_path) {
+                eprintln!("Warning: failed to open {}: {}", output_path.display(), e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn open_path(path: &Path) -> Result<()> {
+    let (program, args): (&str, &[&str]) = match std::env::consts::OS {
+        "macos" => ("open", &[]),
+        "windows" => ("cmd", &["/C", "start", ""]),
+        _ => ("xdg-open", &[]),
+    };
+    Command::new(program)
+        .args(args)
+        .arg(path)
+        .status()
+        .with_context(|| format!("Failed to launch '{}'", program))?;
     Ok(())
 }
 
