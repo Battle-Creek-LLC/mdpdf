@@ -22,12 +22,12 @@ struct Converter {
     table_row_cells: Vec<String>,
     current_cell: String,
     in_table_head: bool,
-    in_heading: bool,
     needs_paragraph_break: bool,
     inline_stack: Vec<InlineStyle>,
     in_block_quote: bool,
     block_quote_buf: String,
     in_block_quote_depth: usize,
+    last_item_marker_end: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -56,12 +56,12 @@ impl Converter {
             table_row_cells: Vec::new(),
             current_cell: String::new(),
             in_table_head: false,
-            in_heading: false,
             needs_paragraph_break: false,
             inline_stack: Vec::new(),
             in_block_quote: false,
             block_quote_buf: String::new(),
             in_block_quote_depth: 0,
+            last_item_marker_end: None,
         }
     }
 
@@ -116,7 +116,7 @@ impl Converter {
         let mut result = String::with_capacity(text.len());
         for ch in text.chars() {
             match ch {
-                '*' | '_' | '`' | '#' | '<' | '>' | '@' | '$' | '\\' | '~' => {
+                '*' | '_' | '`' | '#' | '<' | '>' | '@' | '$' | '\\' | '~' | '[' | ']' => {
                     result.push('\\');
                     result.push(ch);
                 }
@@ -137,7 +137,6 @@ impl Converter {
                 if self.needs_paragraph_break {
                     self.push("\n");
                 }
-                self.in_heading = true;
                 let marker = match level {
                     HeadingLevel::H1 => "= ",
                     HeadingLevel::H2 => "== ",
@@ -195,6 +194,7 @@ impl Converter {
                     *n += 1;
                 }
                 self.push(&format!("{}{}", indent, marker));
+                self.last_item_marker_end = Some(self.active_buf().len());
             }
             Tag::Emphasis => {
                 self.inline_stack.push(InlineStyle::Emphasis);
@@ -229,11 +229,12 @@ impl Converter {
                     }
                 }).collect();
 
-                self.output.push_str(&format!(
+                let header = format!(
                     "#table(\n  columns: {},\n  align: ({}),\n  stroke: 0.5pt + luma(200),\n  inset: 8pt,\n",
                     cols,
                     align_strs.join(", "),
-                ));
+                );
+                self.active_buf().push_str(&header);
             }
             Tag::TableHead => {
                 self.in_table_head = true;
@@ -256,7 +257,6 @@ impl Converter {
                 self.needs_paragraph_break = true;
             }
             TagEnd::Heading(_) => {
-                self.in_heading = false;
                 self.push("\n");
                 self.needs_paragraph_break = true;
             }
@@ -282,18 +282,10 @@ impl Converter {
 
                 let code = code.trim_end_matches('\n');
                 let lang_tag = lang.as_deref().unwrap_or("");
+                let fence = "`".repeat(Self::block_fence_len(code));
 
-                if self.in_block_quote {
-                    self.block_quote_buf.push_str(&format!(
-                        "```{}\n{}\n```\n",
-                        lang_tag, code
-                    ));
-                } else {
-                    self.output.push_str(&format!(
-                        "```{}\n{}\n```\n",
-                        lang_tag, code
-                    ));
-                }
+                let rendered = format!("{fence}{lang_tag}\n{code}\n{fence}\n");
+                self.active_buf().push_str(&rendered);
                 self.needs_paragraph_break = true;
             }
             TagEnd::List(_) => {
@@ -321,8 +313,8 @@ impl Converter {
                 self.push("]");
             }
             TagEnd::Table => {
-                self.output.push_str(")\n");
                 self.in_table = false;
+                self.active_buf().push_str(")\n");
                 self.needs_paragraph_break = true;
             }
             TagEnd::TableHead => {
@@ -331,14 +323,18 @@ impl Converter {
                     .iter()
                     .map(|c| format!("[*{}*]", c.trim()))
                     .collect();
-                self.output.push_str(&format!("  table.header({}),\n", cells.join(", ")));
+                let line = format!("  table.header({}),\n", cells.join(", "));
+                self.active_buf().push_str(&line);
                 self.table_row_cells.clear();
             }
             TagEnd::TableRow => {
                 if !self.in_table_head {
-                    for cell in &self.table_row_cells {
-                        self.output.push_str(&format!("  [{}],\n", cell.trim()));
-                    }
+                    let rows: String = self
+                        .table_row_cells
+                        .iter()
+                        .map(|cell| format!("  [{}],\n", cell.trim()))
+                        .collect();
+                    self.active_buf().push_str(&rows);
                 }
                 self.table_row_cells.clear();
             }
@@ -353,19 +349,47 @@ impl Converter {
     fn text(&mut self, text: &str) {
         if self.in_code_block {
             self.code_block_buf.push_str(text);
-        } else if self.in_heading {
-            self.push(text);
         } else {
             self.push(&Self::escape_typst(text));
         }
     }
 
     fn inline_code(&mut self, code: &str) {
-        if code.contains('`') {
-            self.push(&format!("```{}```", code));
-        } else {
-            self.push(&format!("`{}`", code));
+        // Inline raw uses the shortest fence that can't be terminated by the
+        // content. A minimum of 1 keeps simple snippets as `x` — Typst only
+        // interprets the first word as a language tag when the fence is 3+
+        // backticks, so a min of 3 would silently eat e.g. `let` from
+        // `` `let x = 5` ``.
+        let fence = "`".repeat(Self::inline_fence_len(code));
+        let pad_left = if code.starts_with('`') { " " } else { "" };
+        let pad_right = if code.ends_with('`') { " " } else { "" };
+        self.push(&format!("{fence}{pad_left}{code}{pad_right}{fence}"));
+    }
+
+    fn inline_fence_len(content: &str) -> usize {
+        (Self::max_backtick_run(content) + 1).max(1)
+    }
+
+    /// Block raw needs a minimum of 3 backticks so Typst parses the language
+    /// tag; grow beyond that only if the body contains a backtick run of 3+.
+    fn block_fence_len(content: &str) -> usize {
+        (Self::max_backtick_run(content) + 1).max(3)
+    }
+
+    fn max_backtick_run(content: &str) -> usize {
+        let mut max_run = 0usize;
+        let mut cur = 0usize;
+        for ch in content.chars() {
+            if ch == '`' {
+                cur += 1;
+                if cur > max_run {
+                    max_run = cur;
+                }
+            } else {
+                cur = 0;
+            }
         }
+        max_run
     }
 
     fn soft_break(&mut self) {
@@ -390,15 +414,11 @@ impl Converter {
 
     fn task_list_marker(&mut self, checked: bool) {
         let symbol = if checked { "#check-done " } else { "#check-todo " };
-        self.replace_last_list_marker(symbol);
-    }
-
-    fn replace_last_list_marker(&mut self, replacement: &str) {
-        let target = self.active_buf();
-        // Find the last "- " and insert the checkbox symbol after it
-        if let Some(pos) = target.rfind("- ") {
-            let insert_pos = pos + 2;
-            target.insert_str(insert_pos, replacement);
+        if let Some(pos) = self.last_item_marker_end.take() {
+            let buf = self.active_buf();
+            if pos <= buf.len() {
+                buf.insert_str(pos, symbol);
+            }
         }
     }
 
@@ -486,5 +506,84 @@ mod tests {
         let result = markdown_to_typst(md);
         assert!(result.contains("#check-done"));
         assert!(result.contains("#check-todo"));
+    }
+
+    #[test]
+    fn test_escape_brackets_in_text() {
+        // Bare [ and ] in body text must be escaped so they cannot terminate
+        // a surrounding Typst content block.
+        let result = markdown_to_typst("an array like [1, 2, 3] here");
+        assert!(result.contains("\\["));
+        assert!(result.contains("\\]"));
+    }
+
+    #[test]
+    fn test_strikethrough_bracket_injection_blocked() {
+        // Without escaping, the inner ] would close the #strike[...] block
+        // and let "#text(fill: red)[evil]" run as Typst markup.
+        let result = markdown_to_typst("~~foo ] #text(fill: red)[evil~~");
+        assert!(result.contains("#strike["));
+        assert!(!result.contains("] #text(fill: red)["));
+        assert!(result.contains("\\]"));
+        // The injected '#' must also be escaped.
+        assert!(result.contains("\\#text"));
+    }
+
+    #[test]
+    fn test_table_cell_bracket_injection_blocked() {
+        let md = "| A | B |\n|---|---|\n| ] #evil[ | x |";
+        let result = markdown_to_typst(md);
+        assert!(result.contains("\\]"));
+        assert!(result.contains("\\#evil"));
+    }
+
+    #[test]
+    fn test_heading_typst_injection_blocked() {
+        // A '#' in heading text must be escaped so it cannot trigger Typst
+        // function calls.
+        let result = markdown_to_typst("# #set page(width: 10000cm)");
+        assert!(result.contains("\\#set"));
+        assert!(!result.contains("= #set page"));
+    }
+
+    #[test]
+    fn test_heading_dollar_injection_blocked() {
+        let result = markdown_to_typst("# price $x$");
+        assert!(result.contains("\\$x\\$"));
+    }
+
+    #[test]
+    fn test_code_block_with_embedded_triple_backticks() {
+        // The inner ``` must not terminate the outer raw block — fence length
+        // should grow to one more than the longest inner backtick run.
+        let md = "````\nlet s = \"```\";\n````";
+        let result = markdown_to_typst(md);
+        // Outer fence must be at least four backticks.
+        assert!(result.contains("````"));
+        assert!(result.contains("let s = \"```\";"));
+    }
+
+    #[test]
+    fn test_inline_code_plain_stays_single_backtick() {
+        // Typst only interprets a language tag for raw with 3+ backticks, so
+        // simple inline code must stay single-backtick: otherwise `let x = 5`
+        // would be rendered with "let" stripped as a language tag.
+        let result = markdown_to_typst("use `let x = 5` here");
+        assert!(result.contains("`let x = 5`"));
+        assert!(!result.contains("```let"));
+    }
+
+    #[test]
+    fn test_inline_code_with_backticks() {
+        // Inline code containing a backtick must use a longer fence and pad so
+        // the boundary backtick isn't consumed by the fence.
+        let result = markdown_to_typst("use `` ` `` as a quote");
+        assert!(result.contains("`` ` ``"));
+    }
+
+    #[test]
+    fn test_link_url_quote_is_escaped() {
+        let result = markdown_to_typst("[x](https://e.com/\"a)");
+        assert!(result.contains("\\\""));
     }
 }

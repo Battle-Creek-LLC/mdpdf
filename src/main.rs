@@ -19,7 +19,7 @@ struct Cli {
     inputs: Vec<String>,
 
     /// Output PDF path [default: <input-stem>.pdf, or combined.pdf with --combine].
-    /// Required when passing multiple inputs without --combine is not allowed.
+    /// With multiple inputs, --output is only valid alongside --combine.
     #[arg(short, long)]
     output: Option<PathBuf>,
 
@@ -78,24 +78,16 @@ fn main() -> Result<()> {
             parts.push(convert::markdown_to_typst(&markdown));
         }
         let typst_markup = parts.join("\n#pagebreak(weak: true)\n");
-
-        let output_path = cli.output.clone().unwrap_or_else(|| PathBuf::from("combined.pdf"));
-        let pdf_bytes = compile::compile_to_pdf(&typst_markup, &options)?;
-        std::fs::write(&output_path, &pdf_bytes)
-            .with_context(|| format!("Failed to write PDF to {}", output_path.display()))?;
-        eprintln!("{}", output_path.display());
-
-        if cli.open {
-            if let Err(e) = open_path(&output_path) {
-                eprintln!("Warning: failed to open {}: {}", output_path.display(), e);
-            }
-        }
+        let output_path = cli
+            .output
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("combined.pdf"));
+        write_pdf(&typst_markup, &options, &output_path, cli.open)?;
         return Ok(());
     }
 
     for input in &cli.inputs {
         let markdown = read_input(input)?;
-
         let output_path = cli.output.clone().unwrap_or_else(|| {
             if input == "-" {
                 PathBuf::from("output.pdf")
@@ -103,22 +95,23 @@ fn main() -> Result<()> {
                 PathBuf::from(input).with_extension("pdf")
             }
         });
-
         let typst_markup = convert::markdown_to_typst(&markdown);
-        let pdf_bytes = compile::compile_to_pdf(&typst_markup, &options)?;
-
-        std::fs::write(&output_path, &pdf_bytes)
-            .with_context(|| format!("Failed to write PDF to {}", output_path.display()))?;
-
-        eprintln!("{}", output_path.display());
-
-        if cli.open {
-            if let Err(e) = open_path(&output_path) {
-                eprintln!("Warning: failed to open {}: {}", output_path.display(), e);
-            }
-        }
+        write_pdf(&typst_markup, &options, &output_path, cli.open)?;
     }
 
+    Ok(())
+}
+
+fn write_pdf(typst_markup: &str, options: &CompileOptions, output_path: &Path, open: bool) -> Result<()> {
+    let pdf_bytes = compile::compile_to_pdf(typst_markup, options)?;
+    std::fs::write(output_path, &pdf_bytes)
+        .with_context(|| format!("Failed to write PDF to {}", output_path.display()))?;
+    eprintln!("{}", output_path.display());
+    if open {
+        if let Err(e) = open_path(output_path) {
+            eprintln!("Warning: failed to open {}: {}", output_path.display(), e);
+        }
+    }
     Ok(())
 }
 
