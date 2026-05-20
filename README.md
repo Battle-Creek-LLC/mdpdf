@@ -14,15 +14,59 @@ Convert Markdown to beautifully typeset PDFs, powered by [Typst](https://typst.a
 
 ## Install
 
-From source (requires a recent Rust toolchain):
+Prebuilt binaries are attached to each [release](https://github.com/Battle-Creek-LLC/mdpdf/releases).
+Each archive ships a single `mdpdf` (or `mdpdf.exe`) binary plus a matching
+`.sha256` checksum.
+
+### macOS (Apple Silicon)
 
 ```sh
-git clone https://github.com/jstockdi/mdpdf.git
-cd mdpdf
-cargo install --path .
+gh release download --pattern 'mdpdf-aarch64-apple-darwin.tar.gz' -R Battle-Creek-LLC/mdpdf
+tar -xzf mdpdf-aarch64-apple-darwin.tar.gz
+sudo mv mdpdf /usr/local/bin/
 ```
 
-This installs the `mdpdf` binary into `~/.cargo/bin`.
+### macOS (Intel)
+
+```sh
+gh release download --pattern 'mdpdf-x86_64-apple-darwin.tar.gz' -R Battle-Creek-LLC/mdpdf
+tar -xzf mdpdf-x86_64-apple-darwin.tar.gz
+sudo mv mdpdf /usr/local/bin/
+```
+
+> Binaries aren't notarized. On first run macOS may block them — clear the
+> quarantine attribute with `xattr -d com.apple.quarantine /usr/local/bin/mdpdf`.
+
+### Linux (x86_64)
+
+```sh
+gh release download --pattern 'mdpdf-x86_64-unknown-linux-gnu.tar.gz' -R Battle-Creek-LLC/mdpdf
+tar -xzf mdpdf-x86_64-unknown-linux-gnu.tar.gz
+sudo mv mdpdf /usr/local/bin/
+```
+
+### Linux (ARM64)
+
+```sh
+gh release download --pattern 'mdpdf-aarch64-unknown-linux-gnu.tar.gz' -R Battle-Creek-LLC/mdpdf
+tar -xzf mdpdf-aarch64-unknown-linux-gnu.tar.gz
+sudo mv mdpdf /usr/local/bin/
+```
+
+### Windows (PowerShell)
+
+```powershell
+gh release download --pattern 'mdpdf-x86_64-pc-windows-msvc.zip' -R Battle-Creek-LLC/mdpdf
+Expand-Archive mdpdf-x86_64-pc-windows-msvc.zip -DestinationPath .
+# Move mdpdf.exe into a directory on your PATH, e.g.:
+Move-Item mdpdf.exe "$env:USERPROFILE\bin\"
+```
+
+### From source
+
+```sh
+cargo install --git https://github.com/Battle-Creek-LLC/mdpdf
+```
 
 ## Usage
 
