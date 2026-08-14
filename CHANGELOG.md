@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-14
+
 ### Added
 
 - Image embedding: `![alt](path.png)` renders PNG, JPEG, GIF, SVG, and WebP,
@@ -58,5 +60,6 @@ via Typst, with no LaTeX toolchain, headless browser, or network access.
 - Prebuilt binaries on each tagged release for Linux (x86_64, aarch64),
   macOS (x86_64, aarch64), and Windows (x86_64).
 
-[Unreleased]: https://github.com/Battle-Creek-LLC/mdpdf/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Battle-Creek-LLC/mdpdf/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Battle-Creek-LLC/mdpdf/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Battle-Creek-LLC/mdpdf/releases/tag/v0.1.0
