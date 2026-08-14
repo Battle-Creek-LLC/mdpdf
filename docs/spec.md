@@ -88,9 +88,47 @@ Options:
       --font-size <PT>     Base body font size [default: 11]
       --page-size <SIZE>   Page size: letter, a4 [default: letter]
       --margin <MM>        Page margins in mm [default: 25]
+      --config <PATH>      Config file, overriding user and project configs
+      --no-config          Ignore the user config and any discovered .mdpdf.toml
   -h, --help               Print help
   -V, --version            Print version
 ```
+
+## Configuration
+
+Header and footer bands are configured by file rather than by flag, because a
+logo path and three zones of Markdown do not fit comfortably on a command line
+and are usually stable per project.
+
+Three sources merge per field, each overriding the previous:
+
+1. `$XDG_CONFIG_HOME/mdpdf/config.toml`, falling back to `~/.config` on unix
+   and `%APPDATA%\mdpdf\config.toml` on Windows
+2. the nearest ancestor `.mdpdf.toml`, searching upward from the document
+3. `--config <PATH>`
+
+CLI flags override all three. Because merging is per field, a zone keeps the
+directory of the config file that set it, and relative image paths resolve
+against that directory rather than the last file merged.
+
+```toml
+[header]              # and [footer]
+left         = ""     # Markdown, including ![](logo.svg)
+center       = ""
+right        = ""
+image_height = 8      # mm
+font_size    = 8      # pt
+
+[page]
+size      = "letter"
+margin    = 25
+font_size = 10
+title     = ""
+```
+
+Tokens `{page}`, `{pages}`, `{title}`, and `{date}` are substituted after
+Markdown escaping and only within zones, so body text containing `{page}`
+renders literally.
 
 ### Examples
 
@@ -125,16 +163,16 @@ mdpdf notes.md --page-size a4 --font-size 12
 - GFM tables
 - Task lists (checkboxes)
 - Strikethrough text
+- Images (PNG, JPEG, GIF, SVG, WebP), scaled down to the text width when oversized
+- Header/footer bands with left/center/right zones, set from a TOML config
+- Page numbers, document title, and date via header/footer tokens
 
 ### Future
 
 - Table of contents generation (`--toc` flag)
-- Page numbers in footer
 - Custom theme files
-- Header/footer templates
 - Multi-file input (concatenate)
 - Watch mode (`--watch`)
-- Image embedding
 
 ## Styling Defaults
 
@@ -159,8 +197,9 @@ mdpdf/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs          # CLI entry point, arg parsing
-│   ├── convert.rs       # Markdown → Typst markup conversion
-│   ├── compile.rs       # Typst markup → PDF compilation
+│   ├── config.rs        # Config file discovery, parsing, and merging
+│   ├── convert.rs       # Markdown → Typst markup conversion, image resolution
+│   ├── compile.rs       # Typst markup → PDF compilation, header/footer bands
 │   └── fonts.rs         # Embedded font loading for Typst
 ├── fonts/
 │   ├── Inter-Regular.ttf
@@ -182,6 +221,10 @@ mdpdf/
 - Malformed Markdown → best-effort rendering (Markdown is lenient by design)
 - Output write failure → error with path and OS error message
 - Typst compilation error → surface the Typst diagnostic
+- Missing, remote, or unsupported image → warn on stderr and fall back to the
+  alt text, so one broken reference does not fail the whole render
+- Malformed or unknown key in a config file → error naming the file, rather than
+  silently ignoring a typo
 
 ## Testing Strategy
 

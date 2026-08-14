@@ -1,17 +1,153 @@
+use std::path::{Path, PathBuf};
+
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+/// Image formats Typst can decode. An unrecognized extension is reported rather
+/// than passed through, because Typst infers the format from the path alone.
+const SUPPORTED_IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "svg", "webp"];
+
+/// One image resolved from Markdown, mapped to the virtual path the generated
+/// Typst refers to it by.
+pub struct Asset {
+    pub virtual_path: String,
+    pub real_path: PathBuf,
+}
+
+/// Collects the images referenced across every document and header zone in a
+/// single render, so `MdpdfWorld` can serve them and indices never collide.
+#[derive(Default)]
+pub struct AssetRegistry {
+    assets: Vec<Asset>,
+    warnings: Vec<String>,
+}
+
+impl AssetRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn assets(&self) -> &[Asset] {
+        &self.assets
+    }
+
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    fn warn(&mut self, message: String) {
+        self.warnings.push(message);
+    }
+
+    /// Registers a resolved image and returns the virtual path to reference it
+    /// by. Re-registering the same file — a logo repeated across documents —
+    /// reuses the existing entry so the bytes are only held once.
+    fn register(&mut self, real_path: PathBuf, ext: &str) -> String {
+        if let Some(existing) = self.assets.iter().find(|a| a.real_path == real_path) {
+            return existing.virtual_path.clone();
+        }
+        let virtual_path = format!("/assets/{}.{}", self.assets.len(), ext);
+        self.assets.push(Asset {
+            virtual_path: virtual_path.clone(),
+            real_path,
+        });
+        virtual_path
+    }
+}
+
+/// Converts with no base directory, so relative image paths do not resolve.
+/// Callers in `main` always know the source directory and use
+/// [`markdown_to_typst_with_assets`] directly.
+#[cfg(test)]
 pub fn markdown_to_typst(markdown: &str) -> String {
+    let mut registry = AssetRegistry::new();
+    markdown_to_typst_with_assets(markdown, None, &mut registry)
+}
+
+/// Converts Markdown to Typst markup, resolving image references against
+/// `base` — the directory of the file the Markdown came from.
+pub fn markdown_to_typst_with_assets(
+    markdown: &str,
+    base: Option<&Path>,
+    registry: &mut AssetRegistry,
+) -> String {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_GFM;
     let parser = Parser::new_ext(markdown, options);
-    let mut converter = Converter::new();
+    let mut converter = Converter::new(base, registry);
     converter.convert(parser);
     converter.output
 }
 
-struct Converter {
+/// Resolves a Markdown image destination to a readable local file.
+///
+/// Remote URLs are refused rather than fetched: running without network access
+/// is a property of this tool, and a document converter that silently makes
+/// requests would be a surprising capability.
+fn resolve_image_path(dest: &str, base: Option<&Path>) -> Result<PathBuf, String> {
+    let dest = dest.trim();
+    if dest.is_empty() {
+        return Err("empty image path".to_string());
+    }
+    if dest.starts_with("data:") {
+        return Err("data: URIs are not supported".to_string());
+    }
+    if dest.contains("://") {
+        return Err(format!("remote images are not fetched: {}", dest));
+    }
+
+    let expanded = match dest.strip_prefix("~/") {
+        Some(rest) => match home_dir() {
+            Some(home) => home.join(rest),
+            None => return Err(format!("cannot expand '~' in {}: no home directory", dest)),
+        },
+        None => PathBuf::from(dest),
+    };
+
+    let resolved = if expanded.is_absolute() {
+        expanded
+    } else {
+        match base {
+            Some(dir) => dir.join(expanded),
+            None => expanded,
+        }
+    };
+
+    if !resolved.is_file() {
+        return Err(format!("image not found: {}", resolved.display()));
+    }
+    Ok(resolved)
+}
+
+fn image_extension(path: &Path) -> Result<String, String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .ok_or_else(|| format!("image has no file extension: {}", path.display()))?;
+    if !SUPPORTED_IMAGE_EXTS.contains(&ext.as_str()) {
+        return Err(format!(
+            "unsupported image format '{}' ({}); supported: {}",
+            ext,
+            path.display(),
+            SUPPORTED_IMAGE_EXTS.join(", ")
+        ));
+    }
+    Ok(ext)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var).map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+}
+
+struct Converter<'a> {
+    base: Option<PathBuf>,
+    registry: &'a mut AssetRegistry,
+    in_image: bool,
+    image_alt: String,
+    image_vpath: Option<String>,
     output: String,
     list_stack: Vec<ListKind>,
     in_code_block: bool,
@@ -43,9 +179,14 @@ enum InlineStyle {
     Strikethrough,
 }
 
-impl Converter {
-    fn new() -> Self {
+impl<'a> Converter<'a> {
+    fn new(base: Option<&Path>, registry: &'a mut AssetRegistry) -> Self {
         Self {
+            base: base.map(PathBuf::from),
+            registry,
+            in_image: false,
+            image_alt: String::new(),
+            image_vpath: None,
             output: String::new(),
             list_stack: Vec::new(),
             in_code_block: false,
@@ -211,6 +352,19 @@ impl Converter {
             Tag::Link { dest_url, .. } => {
                 self.push(&format!("#link(\"{}\")[", Self::escape_typst_string(&dest_url)));
             }
+            Tag::Image { dest_url, .. } => {
+                self.in_image = true;
+                self.image_alt.clear();
+                self.image_vpath = match resolve_image_path(&dest_url, self.base.as_deref())
+                    .and_then(|path| image_extension(&path).map(|ext| (path, ext)))
+                {
+                    Ok((path, ext)) => Some(self.registry.register(path, &ext)),
+                    Err(reason) => {
+                        self.registry.warn(reason);
+                        None
+                    }
+                };
+            }
             Tag::Table(alignments) => {
                 if self.needs_paragraph_break {
                     self.push("\n");
@@ -312,6 +466,33 @@ impl Converter {
             TagEnd::Link => {
                 self.push("]");
             }
+            TagEnd::Image => {
+                self.in_image = false;
+                let alt = std::mem::take(&mut self.image_alt);
+                match self.image_vpath.take() {
+                    // The virtual path is generated, never user text, so it
+                    // cannot break out of the image() call.
+                    Some(vpath) => {
+                        let rendered = if alt.is_empty() {
+                            format!("#image(\"{}\")", vpath)
+                        } else {
+                            format!(
+                                "#image(\"{}\", alt: \"{}\")",
+                                vpath,
+                                Self::escape_typst_string(&alt)
+                            )
+                        };
+                        self.push(&rendered);
+                    }
+                    // Unresolvable image: fall back to its alt text so the
+                    // document still says what was meant to be there.
+                    None => {
+                        if !alt.is_empty() {
+                            self.push(&Self::escape_typst(&alt));
+                        }
+                    }
+                }
+            }
             TagEnd::Table => {
                 self.in_table = false;
                 self.active_buf().push_str(")\n");
@@ -347,7 +528,10 @@ impl Converter {
     }
 
     fn text(&mut self, text: &str) {
-        if self.in_code_block {
+        if self.in_image {
+            // Alt text is an attribute of the image, not document content.
+            self.image_alt.push_str(text);
+        } else if self.in_code_block {
             self.code_block_buf.push_str(text);
         } else {
             self.push(&Self::escape_typst(text));
@@ -585,5 +769,100 @@ mod tests {
     fn test_link_url_quote_is_escaped() {
         let result = markdown_to_typst("[x](https://e.com/\"a)");
         assert!(result.contains("\\\""));
+    }
+
+    /// Creates a directory holding placeholder files. Resolution only checks
+    /// that the path is a file with a known extension — decoding is Typst's
+    /// job — so the contents are irrelevant here.
+    fn fixture_dir(name: &str, files: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mdpdf-convert-{}", name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create fixture dir");
+        for file in files {
+            std::fs::write(dir.join(file), b"placeholder").expect("write fixture");
+        }
+        dir
+    }
+
+    fn convert_in(dir: &Path, markdown: &str) -> (String, AssetRegistry) {
+        let mut registry = AssetRegistry::new();
+        let markup = markdown_to_typst_with_assets(markdown, Some(dir), &mut registry);
+        (markup, registry)
+    }
+
+    #[test]
+    fn test_image_resolves_to_virtual_path() {
+        let dir = fixture_dir("resolves", &["logo.png"]);
+        let (result, registry) = convert_in(&dir, "![ACME logo](logo.png)");
+
+        assert!(result.contains("#image(\"/assets/0.png\", alt: \"ACME logo\")"));
+        assert_eq!(registry.assets().len(), 1);
+        assert_eq!(registry.assets()[0].real_path, dir.join("logo.png"));
+        assert!(registry.warnings().is_empty());
+    }
+
+    #[test]
+    fn test_image_alt_text_is_not_also_emitted_as_body_text() {
+        // Alt text belongs in the alt: attribute; leaking it into the document
+        // would print the caption next to the image.
+        let dir = fixture_dir("alt-once", &["logo.png"]);
+        let (result, _) = convert_in(&dir, "![only once](logo.png)");
+        assert_eq!(result.matches("only once").count(), 1);
+    }
+
+    #[test]
+    fn test_repeated_image_registers_once() {
+        let dir = fixture_dir("dedup", &["logo.png"]);
+        let (result, registry) = convert_in(&dir, "![a](logo.png)\n\n![b](logo.png)");
+        assert_eq!(registry.assets().len(), 1);
+        assert_eq!(result.matches("/assets/0.png").count(), 2);
+    }
+
+    #[test]
+    fn test_remote_image_is_refused_not_fetched() {
+        let dir = fixture_dir("remote", &[]);
+        let (result, registry) = convert_in(&dir, "![banner](https://example.com/x.png)");
+
+        assert!(registry.assets().is_empty());
+        assert!(registry.warnings()[0].contains("remote images are not fetched"));
+        // Falls back to the alt text so the document still reads sensibly.
+        assert!(result.contains("banner"));
+        assert!(!result.contains("#image("));
+    }
+
+    #[test]
+    fn test_missing_image_warns_and_falls_back_to_alt() {
+        let dir = fixture_dir("missing", &[]);
+        let (result, registry) = convert_in(&dir, "![the chart](nope.png)");
+
+        assert!(registry.assets().is_empty());
+        assert!(registry.warnings()[0].contains("image not found"));
+        assert!(result.contains("the chart"));
+    }
+
+    #[test]
+    fn test_unsupported_image_format_warns() {
+        let dir = fixture_dir("unsupported", &["diagram.bmp"]);
+        let (_, registry) = convert_in(&dir, "![d](diagram.bmp)");
+        assert!(registry.warnings()[0].contains("unsupported image format 'bmp'"));
+    }
+
+    #[test]
+    fn test_image_alt_text_cannot_inject_typst() {
+        // Alt text reaches a Typst string literal, so a quote must be escaped
+        // rather than closing the argument.
+        let dir = fixture_dir("alt-inject", &["logo.png"]);
+        let (result, _) = convert_in(&dir, "![a\") + evil(\"](logo.png)");
+        assert!(result.contains("\\\""));
+        assert!(!result.contains("\") + evil(\""));
+    }
+
+    #[test]
+    fn test_unresolved_image_alt_text_is_escaped() {
+        // The fallback path writes alt text as body content, so it needs the
+        // same escaping as any other text.
+        let dir = fixture_dir("alt-escape", &[]);
+        let (result, _) = convert_in(&dir, "![#set page(width: 900cm)](nope.png)");
+        assert!(result.contains("\\#set"));
     }
 }

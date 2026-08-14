@@ -1274,6 +1274,8 @@ dependencies = [
  "clap",
  "comemo",
  "pulldown-cmark",
+ "serde",
+ "toml",
  "typst",
  "typst-pdf",
 ]
