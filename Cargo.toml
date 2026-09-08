@@ -1,6 +1,6 @@
 [package]
 name = "mdpdf"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Convert Markdown to beautifully typeset PDFs"
 
@@ -11,3 +11,5 @@ typst = "0.14"
 typst-pdf = "0.14"
 comemo = "0.5"
 anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
