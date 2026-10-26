@@ -31,6 +31,8 @@ pub struct CompileOptions {
     pub page_size: String,
     pub margin_mm: f64,
     pub font_size: f64,
+    /// Space between paragraphs, in em.
+    pub paragraph_spacing_em: f64,
     pub title: Option<String>,
     pub header: Zones,
     pub footer: Zones,
@@ -42,6 +44,7 @@ impl Default for CompileOptions {
             page_size: "us-letter".to_string(),
             margin_mm: 25.0,
             font_size: 10.0,
+            paragraph_spacing_em: 1.2,
             title: None,
             header: Zones::default(),
             footer: Zones::default(),
@@ -135,7 +138,7 @@ fn build_preamble(options: &CompileOptions) -> String {
     format!(
         r##"{title_line}#set page(paper: "{page}", margin: {margin}mm{header_line}{footer_line})
 #set text(font: "Inter", size: {font_size}pt, fill: luma(30))
-#set par(justify: true, leading: 0.65em, spacing: 0.65em)
+#set par(justify: true, leading: 0.65em, spacing: {paragraph_spacing}em)
 
 #show heading.where(level: 1): set text(size: 21pt, weight: "bold")
 #show heading.where(level: 2): set text(size: 17pt, weight: "bold")
@@ -185,6 +188,7 @@ fn build_preamble(options: &CompileOptions) -> String {
         header_line = header_line,
         footer_line = footer_line,
         font_size = options.font_size,
+        paragraph_spacing = options.paragraph_spacing_em,
     )
 }
 
@@ -390,6 +394,15 @@ mod tests {
         let preamble = build_preamble(&options);
         assert!(preamble.contains("header: {"));
         assert!(preamble.contains("[left bit]"));
+    }
+
+    #[test]
+    fn preamble_uses_paragraph_spacing() {
+        let options = CompileOptions {
+            paragraph_spacing_em: 1.1,
+            ..CompileOptions::default()
+        };
+        assert!(build_preamble(&options).contains("spacing: 1.1em"));
     }
 
     #[test]

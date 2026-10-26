@@ -9,7 +9,7 @@ Convert Markdown to beautifully typeset PDFs, powered by [Typst](https://typst.a
 - GitHub-flavored Markdown: tables, strikethrough, task lists, fenced code blocks, block quotes
 - Embedded images — PNG, JPEG, GIF, SVG, and WebP
 - Headers and footers with page numbers, a logo, and a date, set from a config file
-- Clean, print-ready typography with configurable font size, page size, and margins
+- Clean, print-ready typography with configurable font size, paragraph spacing, page size, and margins
 - Render multiple files at once — one PDF per input, or `--combine` them into a single document
 - Read from stdin with `-`
 - `--open` to launch the rendered PDF in your system viewer
@@ -106,6 +106,7 @@ mdpdf notes.md --no-config
 | `-c, --combine` | Merge all inputs into one PDF, separated by page breaks. |
 | `-t, --title <TITLE>` | PDF document title metadata. |
 | `--font-size <PT>` | Base body font size in points (default: `10`). |
+| `--paragraph-spacing <EM>` | Space between paragraphs in em (default: `1.2`). |
 | `--page-size <SIZE>` | `letter` or `a4` (default: `letter`). |
 | `--margin <MM>` | Page margins in millimeters (default: `25`). |
 | `--config <PATH>` | Config file to use, overriding the user and project configs. |
@@ -183,10 +184,11 @@ image_height = 8      # mm; bounds logo height so it can't inflate the band
 font_size    = 8      # pt
 
 [page]
-size      = "letter"  # letter | a4
-margin    = 25        # mm
-font_size = 10        # pt
-title     = ""        # PDF title metadata; --title wins
+size              = "letter"  # letter | a4
+margin            = 25        # mm
+font_size         = 10        # pt
+paragraph_spacing = 1.2       # em; space between paragraphs
+title             = ""        # PDF title metadata; --title wins
 ```
 
 ## License

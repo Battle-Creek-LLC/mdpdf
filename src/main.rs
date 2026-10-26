@@ -14,6 +14,7 @@ use compile::{CompileOptions, Zones};
 use convert::AssetRegistry;
 
 const DEFAULT_FONT_SIZE_PT: f64 = 10.0;
+const DEFAULT_PARAGRAPH_SPACING_EM: f64 = 1.2;
 const DEFAULT_MARGIN_MM: f64 = 25.0;
 const DEFAULT_PAGE_SIZE: &str = "letter";
 
@@ -40,6 +41,10 @@ struct Cli {
     /// Base body font size in points [default: 10]
     #[arg(long)]
     font_size: Option<f64>,
+
+    /// Space between paragraphs in em [default: 1.2]
+    #[arg(long)]
+    paragraph_spacing: Option<f64>,
 
     /// Page size: letter, a4 [default: letter]
     #[arg(long)]
@@ -95,6 +100,10 @@ fn main() -> Result<()> {
             .font_size
             .or(cfg.font_size_pt)
             .unwrap_or(DEFAULT_FONT_SIZE_PT),
+        paragraph_spacing_em: cli
+            .paragraph_spacing
+            .or(cfg.paragraph_spacing_em)
+            .unwrap_or(DEFAULT_PARAGRAPH_SPACING_EM),
         title: title.clone(),
         header: Zones::default(),
         footer: Zones::default(),
