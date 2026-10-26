@@ -183,7 +183,7 @@ mdpdf notes.md --page-size a4 --font-size 12
 | H3 | 16pt, Bold | 0.6em above, 0.3em below |
 | H4 | 14pt, Bold | 0.5em above, 0.25em below |
 | H5–H6 | 12pt, Bold | 0.4em above, 0.2em below |
-| Body | 11pt, Regular | Justified, 0.6em paragraph spacing |
+| Body | 11pt, Regular | Justified, 1.2em paragraph spacing |
 | Code block | 9pt, Mono | Rounded rect background #f6f8fa, 8pt padding |
 | Inline code | 10pt, Mono | Background #f0f0f0, 2pt horizontal padding |
 | Block quote | 11pt | Left border #cccccc 2pt, left padding 12pt, text color #555555 |

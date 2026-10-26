@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--paragraph-spacing <EM>` flag and `[page] paragraph_spacing` config key.
+
+### Changed
+
+- Default paragraph spacing raised from 0.65em to 1.2em so paragraph breaks
+  are distinguishable from line wraps in justified text.
+
 ## [0.2.0] — 2026-08-14
 
 ### Added

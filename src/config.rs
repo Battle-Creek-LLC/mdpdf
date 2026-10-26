@@ -43,6 +43,7 @@ pub struct PageFile {
     pub size: Option<String>,
     pub margin: Option<f64>,
     pub font_size: Option<f64>,
+    pub paragraph_spacing: Option<f64>,
     pub title: Option<String>,
 }
 
@@ -101,6 +102,7 @@ pub struct Config {
     pub page_size: Option<String>,
     pub margin_mm: Option<f64>,
     pub font_size_pt: Option<f64>,
+    pub paragraph_spacing_em: Option<f64>,
     pub title: Option<String>,
 }
 
@@ -119,6 +121,9 @@ impl Config {
         }
         if let Some(v) = file.page.font_size {
             self.font_size_pt = Some(v);
+        }
+        if let Some(v) = file.page.paragraph_spacing {
+            self.paragraph_spacing_em = Some(v);
         }
         if let Some(v) = file.page.title {
             self.title = Some(v);
@@ -236,6 +241,13 @@ mod tests {
         config.overlay(parse("[page]\nmargin = 15.0\n"), Path::new("/proj"));
         assert_eq!(config.margin_mm, Some(15.0));
         assert_eq!(config.page_size.as_deref(), Some("a4"));
+    }
+
+    #[test]
+    fn paragraph_spacing_is_read_from_page() {
+        let mut config = Config::default();
+        config.overlay(parse("[page]\nparagraph_spacing = 1.5\n"), Path::new("/proj"));
+        assert_eq!(config.paragraph_spacing_em, Some(1.5));
     }
 
     #[test]
